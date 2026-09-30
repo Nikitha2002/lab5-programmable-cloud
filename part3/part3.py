@@ -13,7 +13,7 @@ VM_TARGET = "vm2-flask-app"
 MACHINE_TYPE = "e2-micro"
 IMAGE_FAMILY = "ubuntu-2204-lts"
 IMAGE_PROJECT = "ubuntu-os-cloud"
-SERVICE_KEY_PATH = 'service-account-key.json'
+SERVICE_KEY_PATH = 'service-credentials.json'
 
 # === AUTHENTICATION ===
 print("Initializing service account authentication...")

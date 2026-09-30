@@ -1,69 +1,99 @@
 #!/usr/bin/env python3
+
 import time
 from google.cloud import compute_v1
+
 
 # Configuration
 PROJECT = "lab5-programmable-cloud-510117"
 ZONE = "us-central1-a"
 SOURCE_INSTANCE = "flask-vm"
-IMAGE_NAME = "flask-image"
+SNAPSHOT_NAME = "base-snapshot-flask-vm"
 NUM_INSTANCES = 3
-MACHINE_TYPE = "e2-micro"
+MACHINE_TYPE = "f1-micro"
+
 
 instances_client = compute_v1.InstancesClient()
-images_client = compute_v1.ImagesClient()
-global_operations_client = compute_v1.GlobalOperationsClient()
+disks_client = compute_v1.DisksClient()
 
 
 def stop_source_instance():
-    """Stops the source VM instance before creating an image."""
+    """Stops the source VM instance before creating a snapshot."""
+
     print(f"Stopping instance '{SOURCE_INSTANCE}'...")
+
     try:
-        op = instances_client.stop(project=PROJECT, zone=ZONE, instance=SOURCE_INSTANCE)
+        op = instances_client.stop(
+            project=PROJECT,
+            zone=ZONE,
+            instance=SOURCE_INSTANCE
+        )
         op.result()
         print(f"Instance '{SOURCE_INSTANCE}' stopped successfully.")
+
     except Exception as e:
         print(f"Note on stopping instance: {e}")
 
 
-def create_image_from_instance():
-    """Creates a custom disk image from the boot disk of the source VM."""
-    print(f"Creating image '{IMAGE_NAME}' from instance '{SOURCE_INSTANCE}'...")
-    
-    # Get boot disk URI of flask-vm
-    instance = instances_client.get(project=PROJECT, zone=ZONE, instance=SOURCE_INSTANCE)
-    boot_disk_source = instance.disks[0].source
+def create_snapshot_from_instance():
+    """Creates a snapshot from the boot disk of the source VM."""
 
-    image = compute_v1.Image(
-        name=IMAGE_NAME,
-        source_disk=boot_disk_source
+    print(
+        f"Creating snapshot '{SNAPSHOT_NAME}' "
+        f"from instance '{SOURCE_INSTANCE}'..."
     )
-    
-    op = images_client.insert(project=PROJECT, image_resource=image)
+
+    instance = instances_client.get(
+        project=PROJECT,
+        zone=ZONE,
+        instance=SOURCE_INSTANCE
+    )
+
+    boot_disk_source = instance.disks[0].source
+    boot_disk_name = boot_disk_source.split("/")[-1]
+
+    snapshot = compute_v1.Snapshot(
+        name=SNAPSHOT_NAME,
+        source_disk=(
+            f"projects/{PROJECT}/zones/{ZONE}/disks/{boot_disk_name}"
+        )
+    )
+
+    op = disks_client.create_snapshot(
+        project=PROJECT,
+        zone=ZONE,
+        disk=boot_disk_name,
+        snapshot_resource=snapshot
+    )
+
     op.result()
-    print(f"Custom image '{IMAGE_NAME}' created successfully.")
+
+    print(f"Snapshot '{SNAPSHOT_NAME}' created successfully.")
 
 
-def create_instance_from_image(instance_name):
-    """Creates a new instance using the custom image as the boot disk."""
+def create_instance_from_snapshot(instance_name):
+    """Creates a new VM using the snapshot as its boot disk."""
+
     print(f"Starting creation of '{instance_name}'...")
     start_time = time.time()
 
-    # Configure boot disk from custom image
     initialize_params = compute_v1.AttachedDiskInitializeParams(
-        source_image=f"projects/{PROJECT}/global/images/{IMAGE_NAME}"
+        source_snapshot=(
+            f"projects/{PROJECT}/global/snapshots/{SNAPSHOT_NAME}"
+        )
     )
+
     boot_disk = compute_v1.AttachedDisk(
         boot=True,
         auto_delete=True,
         initialize_params=initialize_params
     )
 
-    # Network interface with ephemeral public IP
     access_config = compute_v1.AccessConfig(
         type_=compute_v1.AccessConfig.Type.ONE_TO_ONE_NAT.name,
         name="External NAT"
     )
+
     network_interface = compute_v1.NetworkInterface(
         network="global/networks/default",
         access_configs=[access_config]
@@ -77,11 +107,21 @@ def create_instance_from_image(instance_name):
         tags=compute_v1.Tags(items=["allow-5000"])
     )
 
-    op = instances_client.insert(project=PROJECT, zone=ZONE, instance_resource=instance)
+    op = instances_client.insert(
+        project=PROJECT,
+        zone=ZONE,
+        instance_resource=instance
+    )
+
     op.result()
 
     elapsed_time = time.time() - start_time
-    print(f"Instance '{instance_name}' created in {elapsed_time:.2f} seconds.")
+
+    print(
+        f"Instance '{instance_name}' created "
+        f"in {elapsed_time:.2f} seconds."
+    )
+
     return elapsed_time
 
 
@@ -89,18 +129,22 @@ def main():
     # 1. Stop the original VM
     stop_source_instance()
 
-    # 2. Create image from original VM
-    create_image_from_instance()
+    # 2. Create a snapshot from the original VM's boot disk
+    create_snapshot_from_instance()
 
-    # 3. Spin up 3 new instances from the image and measure boot times
+    # 3. Create three instances from the snapshot
     timings = []
+
     for i in range(1, NUM_INSTANCES + 1):
         vm_name = f"flask-vm-replica-{i}"
-        elapsed = create_instance_from_image(vm_name)
+
+        elapsed = create_instance_from_snapshot(vm_name)
+
         timings.append((vm_name, elapsed))
 
-    # Summary
+    # 4. Print timing summary
     print("\n--- Summary of Creation Times ---")
+
     for vm_name, elapsed in timings:
         print(f"{vm_name}: {elapsed:.2f} seconds")
 
